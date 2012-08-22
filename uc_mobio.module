@@ -1,0 +1,180 @@
+<?php
+/**
+ * @file
+ * TODO: Enter file description here.
+ */
+
+/**
+ * Implements hook_help().
+ */
+function uc_mobio_help($path, $arg) {
+  /* INFO:
+   * The help hook is for displaying helpful messages at the top of pages indicated
+   * by $section to further explain how they work. Adding certain "keywords" to the end of 
+   * a given path (like admin/modules#description) will cause this text to display elsewhere
+   * in the page as well (in this case, in the description section for the given module).
+   */
+  switch ($path) {
+    case 'admin/help#uc_mobio':
+      return t("TODO: Create admin help text.");
+    // OPTIONAL: Add additional cases for other paths that should display help text.
+  }
+}
+
+/**
+ * Implements hook_menu().
+ */
+function uc_mobio_menu() {
+  $items['check/sms/payment'] = array(
+    'title' => 'Check sms payment',
+    'page callback' => '_check_sms_payment',
+    'access arguments' => array('access content'),
+    'type' => MENU_CALLBACK,
+  );
+
+  return $items;
+}
+
+/**
+ * Implements hook_uc_payment_method().
+ */
+function uc_mobio_uc_payment_method() {
+  $methods['sms'] = array(
+    'name' => t('SMS Mobio'),
+    'title' => t('SMS Mobio'),
+    'desc' => t('SMS Mobio payment method type.'),
+    'callback' => 'uc_payment_method_mobio',
+    'weight' => 10,
+    'checkout' => TRUE,
+    'no_gateway' => TRUE,
+  );
+
+  return $methods;
+}
+
+/**
+ * Payment method callback for the "Check" payment method.
+ */
+function uc_payment_method_mobio($op, &$order, $form = NULL, &$form_state = NULL) {
+  switch ($op) {
+    
+    case 'order-submit':
+      foreach ($order -> products AS $product) {
+        $serv_keyword = $product -> field_sms_service_keyword['und'][0]['value'];
+        continue;
+      }
+      
+      $message = t('Send sms with text <strong>:serv_keyword :order_id</strong> to short number <strong>1093</strong> (Price of the sms is the same as on product.).', array(':order_id' => $order ->  order_id, ':serv_keyword' => $serv_keyword));
+      drupal_set_message($message);
+      
+      break;
+  }
+}
+
+function _check_sms_payment() {
+  $message = $_REQUEST["message"];
+  $order_id = $_REQUEST["item"];
+  $fromnum = $_REQUEST["fromnum"];
+  $extid = $_REQUEST["extid"];
+  $serv_id = $_REQUEST["servID"];
+
+  watchdog('uc_mobio', t('Mobio site request: message: :message, item: :item, fromnim: :fromnum, extid: :extid, serv_id: :servid', array(':message' => $message, ':item' => $order_id, ':fromnum' => $fromnum, ':extid' => $extid, ':servid' => $serv_id)));
+  
+  $mobio_remote_addrs = array("87.120.176.216", "194.12.244.114");
+  
+  if (in_array($_SERVER['REMOTE_ADDR'], $mobio_remote_addrs)) {
+    global $user;
+    
+    $today = time();
+    
+    //register received sms payments
+    $record = (object) NULL;
+    $record -> fromnum = $fromnum;
+    $record -> message = $message;
+    $record -> item = $order_id;
+    $record -> extid = $extid;
+    $record -> servID = $serv_id;
+    $record -> timestamp = $today;//time received payment
+    drupal_write_record('uc_mobio_sms', $record);
+    
+    //insert request data in table
+    db_merge('uc_mobio_sms')
+      ->key(array('item' => $order_id))
+      ->fields(array(
+        'fromnum' => $fromnum,
+        'message'   => $message,
+        'extid'  => $extid,
+        'servID'  => $serv_id,
+        'timestamp'  => $today,
+      ))
+      ->execute();
+    
+    $order = uc_order_load($order_id);
+    
+    rules_invoke_event('uc_sms_code_insert', $user, array(0), $serv_id, $order);
+    
+    //ToDo:
+    //add site name to message
+    
+    $sms_reply = "SMS Payment received for order " . "$order_id.";
+    file("http://mobio.bg/paynotify/pnsendsms.php?servID=$serv_id&tonum=$fromnum&extid=$extid&message=" . urlencode($sms_reply));
+  }
+}
+
+/**
+ * Implements hook_rules_event_info().
+ */
+function uc_mobio_rules_event_info() {
+  $items = array(
+    'uc_sms_code_insert' => array(
+      'label' => t('After sent UC proper SMS code'),
+      'module' => 'uc_mobio',
+      'group' => t('SMS'),
+      'variables' => array(
+        'acting_user' => array('type' => 'user', 'label' => t('The user who sent UC code.')),
+        'sms_code' => array('type' => 'text', 'label' => t('The sent UC code.')),
+        'service_id' => array('type' => 'text', 'label' => t('The UC serv_id.')),
+        'order' => array('type' => 'uc_order', 'label' => t('The UC Order id')),
+      )
+    ),
+  );
+  return $items;
+}
+
+/**
+ * Implements hook_rules_condition_info()
+ */
+function uc_mobio_rules_condition_info() {
+  return array(
+    'uc_mobio_condition_service_id' => array(
+      'label' => t('UC SMS Service id'),
+      'arguments' => array(
+        'acting_user' => array('type' => 'user', 'label' => t('The user who sent uc code.')),
+        'sms_code' => array('type' => 'value', 'label' => t('The sms code.')),
+        'service_id' => array('type' => 'string', 'label' => t('The uc sms service id (service cost)')),
+        'order' => array('type' => 'uc_order', 'label' => t('The order id')),
+      ),
+      'module' => 'uc_mobio',
+    ),
+  );
+}
+/**
+ * Condition sms_mobio_condition_service_id
+ */
+function uc_mobio_condition_service_id($user, $sms_code, $service_id, $order) {
+  $valid_sms = uc_proper_sent_code_load($user, $sms_code, $service_id);
+  return ($valid_sms) ? TRUE : FALSE;
+}
+
+function uc_proper_sent_code_load($user, $sms_code, $service_id) {
+  $sms_code = db_select('uc_mobio_sms', 's')
+    -> fields('s', array('sms_code'))
+    -> condition('uid', $user -> uid)
+    -> condition('sms_code', $sms_code[0])
+    -> condition('service_id', $service_id)
+    -> execute()
+    -> fetchField();
+    
+  return $sms_code;
+}
+

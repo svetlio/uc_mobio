@@ -1,0 +1,8 @@
+name = SMS Mobio for UC3
+description = Does awesome things. Makes tea. Washes up. Favours of a personal nature.
+dependencies[] = uc_store
+dependencies[] = uc_payment
+dependencies[] = uc_product
+package = Ubercart - payment
+core = 7.x
+files[] = uc_mobio.module
